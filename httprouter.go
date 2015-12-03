@@ -21,7 +21,7 @@ import (
 var id int
 var hmap map[int]DataStorage
 
-type UberAPIResponse struct {
+type UberAPIRes struct {
     Prices []struct {
         CurrencyCode    string  `json:"currency_code"`
         DisplayName     string  `json:"display_name"`
@@ -35,12 +35,12 @@ type UberAPIResponse struct {
     } `json:"prices"`
 }
 
-type TripRequest struct {
+type TripReq struct {
     Starting_from_location_id bson.ObjectId
     Location_ids              []bson.ObjectId
 }
 
-type TripResponse struct {
+type TripRes struct {
     Id                        int
     Status                    string
     Starting_from_location_id bson.ObjectId
@@ -52,7 +52,6 @@ type TripResponse struct {
 
 type DataStorage struct {
     Id                        int
-    // Product_id                string
     Index                     int
     Status                    string
     Starting_from_location_id bson.ObjectId
@@ -62,7 +61,7 @@ type DataStorage struct {
     Total_distance            float64
 }
 
-type UberRequestResponse struct {
+type UberReqRes struct {
     RequestID       string  `json:"request_id"`
     Status          string  `json:"status"`
     Vehicle         string  `json:"vehicle"`
@@ -72,7 +71,7 @@ type UberRequestResponse struct {
     SurgeMultiplier float64 `json:"surge_multiplier"`
 }
 
-type CarResponse struct {
+type TaxiRes struct {
     Id                           int
     Status                       string
     Starting_from_location_id    bson.ObjectId
@@ -84,7 +83,7 @@ type CarResponse struct {
     Uber_wait_time_eta           int
 }
 
-type UserRequest struct {
+type PassengerReq struct {
     Product_id      string  `json:"product_id"`
     Start_latitude  float64 `json:"start_latitude"`
     Start_longitude float64 `json:"start_longitude"`
@@ -92,7 +91,7 @@ type UserRequest struct {
     End_longitude   float64 `json:"end_longitude"`
 }
 
-type UberResponse struct {
+type UberRes struct {
     Driver          interface{} `json:"driver"`
     Eta             int         `json:"eta"`
     Location        interface{} `json:"location"`
@@ -100,6 +99,18 @@ type UberResponse struct {
     Status          string      `json:"status"`
     SurgeMultiplier float64     `json:"surge_multiplier"`
     Vehicle         interface{} `json:"vehicle"`
+}
+
+
+func getID() int {
+    if id == 0 {
+        for id == 0 {
+            id = rand.Intn(10000)
+        }
+    } else {
+        id = id + 1
+    }
+    return id
 }
 
 func getSession() *mgo.Session {  
@@ -121,8 +132,8 @@ func main() {
     mux.POST("/locations/", uc.CreateLocations)
     mux.DELETE("/locations/:id", uc.RemoveLocations)
     mux.PUT("/locations/:id", uc.UpdateLocations)
-    mux.GET("/trips/:trip_id", GetTrip)
     mux.POST("/trips/", CreateTrip)
+    mux.GET("/trips/:trip_id", GetTrip)
     mux.PUT("/trips/:trip_id/request", CarRequest)
     server := http.Server{
             Addr:        "0.0.0.0:8080",
@@ -132,18 +143,15 @@ func main() {
 }
 
 func CreateTrip(rw http.ResponseWriter, req *http.Request, p httprouter.Params) {
-    var tripReq TripRequest
+    var tripReq TripReq
     json.NewDecoder(req.Body).Decode(&tripReq)
-
     dataStorage := DataStorage{}
-    tripRes := TripResponse{}
+    tripRes := TripRes{}
     tripRes.Id = getID()
     tripRes.Status = "planning"
     tripRes.Starting_from_location_id = tripReq.Starting_from_location_id
     tripRes.Best_route_location_id = tripReq.Location_ids
     getBestRoute(&tripRes, &dataStorage, tripReq.Starting_from_location_id, tripReq.Location_ids)
-
-    fmt.Println(dataStorage)
 
     hmap[tripRes.Id] = dataStorage
 
@@ -153,135 +161,7 @@ func CreateTrip(rw http.ResponseWriter, req *http.Request, p httprouter.Params) 
     fmt.Fprintf(rw, "%s", trip)
 }
 
-func GetTrip(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-    tId := p.ByName("trip_id")
-    checkID, _ := strconv.Atoi(tId)
-    var dataStorage DataStorage
-    findTarget := false
-
-    for key, value := range hmap {
-        if key == checkID {
-            dataStorage = value
-            findTarget = true
-        }
-    }
-
-    if findTarget == false {
-        w.WriteHeader(404)
-        return
-    }
-
-    tripRes := TripResponse{}
-    tripRes.Id = dataStorage.Id
-    tripRes.Status = dataStorage.Status
-    tripRes.Starting_from_location_id = dataStorage.Starting_from_location_id
-    tripRes.Best_route_location_id = dataStorage.Best_route_location_id
-    tripRes.Total_uber_costs = dataStorage.Total_uber_costs
-    tripRes.Total_distance = dataStorage.Total_distance
-    tripRes.Total_uber_duration = dataStorage.Total_uber_duration
-
-    trip, _ := json.Marshal(tripRes)
-    w.WriteHeader(200)
-    fmt.Fprintf(w, "%s", trip)
-}
-
-func CarRequest(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-    tId := p.ByName("trip_id")
-    checkID, _ := strconv.Atoi(tId)
-    var dataStorage DataStorage
-    findTarget := false
-
-    for key, value := range hmap {
-        if key == checkID {
-            dataStorage = value
-            findTarget = true
-        }
-    }
-
-    if findTarget == false {
-        w.WriteHeader(404)
-        return
-    }
-
-    var startLat float64
-    var startLng float64
-    var endLat float64
-    var endLng float64
-    carRes := CarResponse{}
-    response := models.Location{}
-
-    if dataStorage.Index == 0 {
-        if err := getSession().DB("cmpe273").C("assignment2").FindId(dataStorage.Starting_from_location_id).One(&response); err != nil {
-            return
-        }
-        startLat = response.Coordinate.Lat
-        startLng = response.Coordinate.Lng
-
-        if err := getSession().DB("cmpe273").C("assignment2").FindId(dataStorage.Best_route_location_id[0]).One(&response); err != nil {
-            return
-        }
-        endLat = response.Coordinate.Lat
-        endLng = response.Coordinate.Lng
-        uberAPI(&carRes, dataStorage, startLat, startLng, endLat, endLng)
-        carRes.Status = "requesting"
-        carRes.Starting_from_location_id = dataStorage.Starting_from_location_id
-        carRes.Next_destination_location_id = dataStorage.Best_route_location_id[0]
-    } else if dataStorage.Index == len(dataStorage.Best_route_location_id) {
-        if err := getSession().DB("cmpe273").C("assignment2").FindId(dataStorage.Best_route_location_id[len(dataStorage.Best_route_location_id)-1]).One(&response); err != nil {
-            return
-        }
-        startLat = response.Coordinate.Lat
-        startLng = response.Coordinate.Lng
-
-        if err := getSession().DB("cmpe273").C("assignment2").FindId(dataStorage.Starting_from_location_id).One(&response); err != nil {
-            return
-        }
-        endLat = response.Coordinate.Lat
-        endLng = response.Coordinate.Lng
-        uberAPI(&carRes, dataStorage, startLat, startLng, endLat, endLng)
-        carRes.Status = "requesting"
-        carRes.Starting_from_location_id = dataStorage.Best_route_location_id[len(dataStorage.Best_route_location_id)-1]
-        carRes.Next_destination_location_id = dataStorage.Starting_from_location_id
-    } else if dataStorage.Index > len(dataStorage.Best_route_location_id) {
-        carRes.Status = "finished"
-        carRes.Starting_from_location_id = dataStorage.Starting_from_location_id
-        carRes.Next_destination_location_id = dataStorage.Starting_from_location_id
-    } else {
-        if err := getSession().DB("cmpe273").C("assignment2").FindId(dataStorage.Best_route_location_id[dataStorage.Index-1]).One(&response); err != nil {
-            return
-        }
-        startLat = response.Coordinate.Lat
-        startLng = response.Coordinate.Lng
-
-        if err := getSession().DB("cmpe273").C("assignment2").FindId(dataStorage.Best_route_location_id[dataStorage.Index]).One(&response); err != nil {
-            return
-        }
-        endLat = response.Coordinate.Lat
-        endLng = response.Coordinate.Lng
-        uberAPI(&carRes, dataStorage, startLat, startLng, endLat, endLng)
-        carRes.Status = "requesting"
-        carRes.Starting_from_location_id = dataStorage.Best_route_location_id[dataStorage.Index-1]
-        carRes.Next_destination_location_id = dataStorage.Best_route_location_id[dataStorage.Index]
-    }
-
-    carRes.Id = dataStorage.Id
-    carRes.Best_route_location_id = dataStorage.Best_route_location_id
-    carRes.Total_uber_costs = dataStorage.Total_uber_costs
-    carRes.Total_uber_duration = dataStorage.Total_uber_duration
-    carRes.Total_distance = dataStorage.Total_distance
-
-    fmt.Println(dataStorage.Index)
-    dataStorage.Index = dataStorage.Index + 1
-    hmap[dataStorage.Id] = dataStorage
-
-    fmt.Println(dataStorage.Index)
-
-    trip, _ := json.Marshal(carRes)
-    w.WriteHeader(200)
-    fmt.Fprintf(w, "%s", trip)
-}
-
-func getBestRoute(tripRes *TripResponse, dataStorage *DataStorage, originId bson.ObjectId, targetId []bson.ObjectId) {
+func getBestRoute(tripRes *TripRes, dataStorage *DataStorage, originId bson.ObjectId, targetId []bson.ObjectId) {
     pmtTarget, err := permutation.NewPerm(targetId, nil)
     if err != nil {
         fmt.Println(err)
@@ -346,13 +226,12 @@ func getBestRoute(tripRes *TripResponse, dataStorage *DataStorage, originId bson
             urlLeft := "https://api.uber.com/v1/estimates/price?"
             urlRight := "start_latitude=" + strconv.FormatFloat(startLat, 'f', -1, 64) + "&start_longitude=" + strconv.FormatFloat(startLng, 'f', -1, 64) + "&end_latitude=" + strconv.FormatFloat(endLat, 'f', -1, 64) + "&end_longitude=" + strconv.FormatFloat(endLng, 'f', -1, 64) + "&server_token=zoo7SgqJUZCaVNsOAKgiRgvJsv3l8cavZiB6sD07"
             urlFormat := urlLeft + urlRight
-
             getPrices, err := http.Get(urlFormat)
             if err != nil {
                 fmt.Println("Get Prices Error", err)
                 panic(err)
             }
-            var data UberAPIResponse
+            var data UberAPIRes
             json.NewDecoder(getPrices.Body).Decode(&data)
             minPrice = data.Prices[0].LowEstimate
             minDuration = data.Prices[0].Duration
@@ -449,13 +328,137 @@ func AppendFloat(slice []float64, data ...float64) []float64 {
     return slice
 }
 
-func uberAPI(carRes *CarResponse, dataStorage DataStorage, startLat float64, startLng float64, endLat float64, endLng float64) {
+func GetTrip(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+    tId := p.ByName("trip_id")
+    checkID, _ := strconv.Atoi(tId)
+    var dataStorage DataStorage
+    findTarget := false
+
+    for key, value := range hmap {
+        if key == checkID {
+            dataStorage = value
+            findTarget = true
+        }
+    }
+
+    if findTarget == false {
+        w.WriteHeader(404)
+        return
+    }
+
+    tripRes := TripRes{}
+    tripRes.Id = dataStorage.Id
+    tripRes.Status = dataStorage.Status
+    tripRes.Starting_from_location_id = dataStorage.Starting_from_location_id
+    tripRes.Best_route_location_id = dataStorage.Best_route_location_id
+    tripRes.Total_uber_costs = dataStorage.Total_uber_costs
+    tripRes.Total_distance = dataStorage.Total_distance
+    tripRes.Total_uber_duration = dataStorage.Total_uber_duration
+
+    trip, _ := json.Marshal(tripRes)
+    w.WriteHeader(200)
+    fmt.Fprintf(w, "%s", trip)
+}
+
+func CarRequest(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+    tId := p.ByName("trip_id")
+    checkID, _ := strconv.Atoi(tId)
+    var dataStorage DataStorage
+    var startLat float64
+    var startLng float64
+    var endLat float64
+    var endLng float64
+    findTarget := false
+
+    for key, value := range hmap {
+        if key == checkID {
+            dataStorage = value
+            findTarget = true
+        }
+    }
+
+    if findTarget == false {
+        w.WriteHeader(404)
+        return
+    }
+
+    carRes := TaxiRes{}
+    response := models.Location{}
+
+    if dataStorage.Index == 0 {
+        if err := getSession().DB("cmpe273").C("assignment2").FindId(dataStorage.Starting_from_location_id).One(&response); err != nil {
+            return
+        }
+        startLat = response.Coordinate.Lat
+        startLng = response.Coordinate.Lng
+
+        if err := getSession().DB("cmpe273").C("assignment2").FindId(dataStorage.Best_route_location_id[0]).One(&response); err != nil {
+            return
+        }
+        endLat = response.Coordinate.Lat
+        endLng = response.Coordinate.Lng
+        uberAPI(&carRes, dataStorage, startLat, startLng, endLat, endLng)
+        carRes.Status = "requesting"
+        carRes.Starting_from_location_id = dataStorage.Starting_from_location_id
+        carRes.Next_destination_location_id = dataStorage.Best_route_location_id[0]
+    } else if dataStorage.Index == len(dataStorage.Best_route_location_id) {
+        if err := getSession().DB("cmpe273").C("assignment2").FindId(dataStorage.Best_route_location_id[len(dataStorage.Best_route_location_id)-1]).One(&response); err != nil {
+            return
+        }
+        startLat = response.Coordinate.Lat
+        startLng = response.Coordinate.Lng
+
+        if err := getSession().DB("cmpe273").C("assignment2").FindId(dataStorage.Starting_from_location_id).One(&response); err != nil {
+            return
+        }
+        endLat = response.Coordinate.Lat
+        endLng = response.Coordinate.Lng
+        uberAPI(&carRes, dataStorage, startLat, startLng, endLat, endLng)
+        carRes.Status = "requesting"
+        carRes.Starting_from_location_id = dataStorage.Best_route_location_id[len(dataStorage.Best_route_location_id)-1]
+        carRes.Next_destination_location_id = dataStorage.Starting_from_location_id
+    } else if dataStorage.Index > len(dataStorage.Best_route_location_id) {
+        carRes.Status = "finished"
+        carRes.Starting_from_location_id = dataStorage.Starting_from_location_id
+        carRes.Next_destination_location_id = dataStorage.Starting_from_location_id
+    } else {
+        if err := getSession().DB("cmpe273").C("assignment2").FindId(dataStorage.Best_route_location_id[dataStorage.Index-1]).One(&response); err != nil {
+            return
+        }
+        startLat = response.Coordinate.Lat
+        startLng = response.Coordinate.Lng
+
+        if err := getSession().DB("cmpe273").C("assignment2").FindId(dataStorage.Best_route_location_id[dataStorage.Index]).One(&response); err != nil {
+            return
+        }
+        endLat = response.Coordinate.Lat
+        endLng = response.Coordinate.Lng
+        uberAPI(&carRes, dataStorage, startLat, startLng, endLat, endLng)
+        carRes.Status = "requesting"
+        carRes.Starting_from_location_id = dataStorage.Best_route_location_id[dataStorage.Index-1]
+        carRes.Next_destination_location_id = dataStorage.Best_route_location_id[dataStorage.Index]
+    }
+
+    carRes.Id = dataStorage.Id
+    carRes.Best_route_location_id = dataStorage.Best_route_location_id
+    carRes.Total_uber_costs = dataStorage.Total_uber_costs
+    carRes.Total_uber_duration = dataStorage.Total_uber_duration
+    carRes.Total_distance = dataStorage.Total_distance
+    dataStorage.Index = dataStorage.Index + 1
+    hmap[dataStorage.Id] = dataStorage
+
+    trip, _ := json.Marshal(carRes)
+    w.WriteHeader(200)
+    fmt.Fprintf(w, "%s", trip)
+}
+
+func uberAPI(carRes *TaxiRes, dataStorage DataStorage, startLat float64, startLng float64, endLat float64, endLng float64) {
     minPrice := 0
-    serverToken := "*************************************"
+    serverToken := "zoo7SgqJUZCaVNsOAKgiRgvJsv3l8cavZiB6sD07"
     urlLeft := "https://api.uber.com/v1/estimates/price?"
     urlRight := "start_latitude=" + strconv.FormatFloat(startLat, 'f', -1, 64) + "&start_longitude=" + strconv.FormatFloat(startLng, 'f', -1, 64) + "&end_latitude=" + strconv.FormatFloat(endLat, 'f', -1, 64) + "&end_longitude=" + strconv.FormatFloat(endLng, 'f', -1, 64) + "&server_token=" + serverToken
     urlFormat := urlLeft + urlRight
-    var userrequest UserRequest
+    var passengerReq PassengerReq
 
     getPrices, err := http.Get(urlFormat)
     if err != nil {
@@ -463,7 +466,7 @@ func uberAPI(carRes *CarResponse, dataStorage DataStorage, startLat float64, sta
         panic(err)
     }
 
-    var data UberAPIResponse
+    var data UberAPIRes
     index := 0
 
     json.NewDecoder(getPrices.Body).Decode(&data)
@@ -474,17 +477,17 @@ func uberAPI(carRes *CarResponse, dataStorage DataStorage, startLat float64, sta
             minPrice = data.Prices[i].LowEstimate
             index = i
         }
-        userrequest.Product_id = data.Prices[index].ProductID
+        passengerReq.Product_id = data.Prices[index].ProductID
     }
 
     urlPath := "https://sandbox-api.uber.com/v1/requests"
-    userrequest.Start_latitude = startLat
-    userrequest.Start_longitude = startLng
-    userrequest.End_latitude = endLat
-    userrequest.End_longitude = endLng
-    accessToken := "****************************"
+    passengerReq.Start_latitude = startLat
+    passengerReq.Start_longitude = startLng
+    passengerReq.End_latitude = endLat
+    passengerReq.End_longitude = endLng
+    accessToken := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzY29wZXMiOlsicmVxdWVzdCJdLCJzdWIiOiIzMmYwYWRmZC04NTNmLTRkODMtYjA4ZC1jM2Q4ZGIxOTc0NjYiLCJpc3MiOiJ1YmVyLXVzMSIsImp0aSI6IjE1MDkzMzEzLTc2MzktNGI3ZS1hYjMwLThjZDU5NGVhOGFjOSIsImV4cCI6MTQ1MDY3MTUyMiwiaWF0IjoxNDQ4MDc5NTIxLCJ1YWN0IjoiZThjTGVRUnQ1d01xN3RKNFpkclQxU2NGcWhOZmNEIiwibmJmIjoxNDQ4MDc5NDMxLCJhdWQiOiJ4RzNpTFgtUnlOSThGSksxd3NKUk5hejdnLUJ6ZUI2byJ9.b0DC2Lkoq24O7TCm5Jj4Yilu6k4-jLfrifym6oawbrwDN5melUAtV6FlErArqeP8P8LnDrVa1DvhKLlql5MN6kq9Ir2VH54C-pFetadbit0zUNWQHHIJBkAe8ta2CMOxAYEt7m6q2kKMUXbtW8zye0eAajjCN0pv4HMRO-vrprc8vVP3Azri4j3V4QxFOjtlnAdvBpXiwIlMOmN3Di-zknAh2Ah1qbf3S6UQdn3K1mh9K_xuvtgIL6kSE95fTaXfHtTHStViIQqAbKgdnAmI9_23kQUIFeH4Nl2BP7jV2r35OLsBT58PM6L7HbELoVJtBG6V1Rca-WBDxkchU64vOw"
 
-    requestbody, _ := json.Marshal(userrequest)
+    requestbody, _ := json.Marshal(passengerReq)
     client := &http.Client{}
     req, err := http.NewRequest("POST", urlPath, bytes.NewBuffer(requestbody))
     if err != nil {
@@ -501,21 +504,10 @@ func uberAPI(carRes *CarResponse, dataStorage DataStorage, startLat float64, sta
     defer res.Body.Close()
 
     body, err := ioutil.ReadAll(res.Body)
-    uberRes := UberResponse{}
+    uberRes := UberRes{}
     json.Unmarshal(body, &uberRes)
 
     fmt.Println(uberRes)
 
     carRes.Uber_wait_time_eta = uberRes.Eta
-}
-
-func getID() int {
-    if id == 0 {
-        for id == 0 {
-            id = rand.Intn(10000)
-        }
-    } else {
-        id = id + 1
-    }
-    return id
 }
